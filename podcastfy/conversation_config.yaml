@@ -20,6 +20,8 @@ creativity: 1
 user_instructions: ""
 max_num_chunks: 8 # maximum number of rounds of discussions in longform
 min_chunk_size: 600 # minimum number of characters to generate a round of discussion in longform
+max_context_length: 50000 # maximum context length in characters to avoid token limits
+context_window_size: 2 # number of recent conversation parts to keep for context
 
 text_to_speech:
   default_tts_model: "gemini"

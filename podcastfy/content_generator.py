@@ -111,6 +111,8 @@ class LongFormContentGenerator:
         self.llm = llm
         self.max_num_chunks = config_conversation.get("max_num_chunks", 10)  # Default if not in config
         self.min_chunk_size = config_conversation.get("min_chunk_size", 200)  # Default if not in config
+        self.max_context_length = config_conversation.get("max_context_length", 50000)  # Default if not in config
+        self.context_window_size = config_conversation.get("context_window_size", 2)  # Default if not in config
 
     def __calculate_chunk_size(self, input_content: str) -> int:
         """
@@ -236,16 +238,64 @@ class LongFormContentGenerator:
         # Add long-form instructions once at the beginning
         prompt_params["user_instructions"] = prompt_params.get("user_instructions", "") + self.LONGFORM_INSTRUCTIONS
         
+        # Log initial content size
+        logger.info(f"Initial input content size: {len(input_content)} characters")
+        
         # Get chunk size
         chunk_size = self.__calculate_chunk_size(input_content)
+        logger.info(f"Calculated chunk size: {chunk_size} characters")
 
         chunks = self.chunk_content(input_content, chunk_size)
         conversation_parts = []
-        chat_context = input_content
+        # Initialize with input content, but we'll implement sliding window
+        initial_context = input_content
         num_parts = len(chunks)
         print(f"Generating {num_parts} parts")
+        logger.info(f"Content split into {num_parts} chunks")
+        
+        # Sliding window context parameters
+        max_context_length = self.max_context_length  # Use configured value
+        context_window_size = self.context_window_size  # Use configured value
+        logger.info(f"Using sliding window: max_context_length={max_context_length}, context_window_size={context_window_size}")
         
         for i, chunk in enumerate(chunks):
+            logger.info(f"Processing chunk {i+1}/{num_parts}, chunk size: {len(chunk)} characters")
+            
+            # For first chunk, use input content as context
+            if i == 0:
+                chat_context = initial_context
+                logger.info(f"First chunk: using initial context of {len(chat_context)} characters")
+                
+                # For very large documents, even the initial context might be too big
+                if len(chat_context) > max_context_length:
+                    logger.warning(f"Initial context too long ({len(chat_context)} chars), truncating to {max_context_length}")
+                    chat_context = chat_context[-max_context_length:]
+                    # Find the start of a sentence to avoid cutting mid-sentence
+                    sentence_start = chat_context.find('. ')
+                    if sentence_start > 0:
+                        chat_context = chat_context[sentence_start + 2:]  # +2 to skip '. '
+                        logger.info(f"Truncated initial context to {len(chat_context)} characters at sentence boundary")
+            else:
+                # Build sliding window context from recent conversation parts
+                # Include the most recent parts but limit total context size
+                recent_parts = conversation_parts[max(0, i - context_window_size):]
+                chat_context = "\n".join(recent_parts)
+                logger.info(f"Chunk {i+1}: built context from {len(recent_parts)} recent parts, total: {len(chat_context)} characters")
+                
+                # If context is still too long, truncate from the beginning
+                if len(chat_context) > max_context_length:
+                    logger.warning(f"Context too long ({len(chat_context)} chars), truncating to {max_context_length}")
+                    # Keep the end of the context (most recent parts)
+                    chat_context = chat_context[-max_context_length:]
+                    # Find the start of the next person tag to avoid cutting mid-conversation
+                    person_tag_start = chat_context.find('<Person')
+                    if person_tag_start > 0:
+                        chat_context = chat_context[person_tag_start:]
+                        logger.info(f"Truncated context to {len(chat_context)} characters at person tag boundary")
+            
+            # Log the final context size before sending to LLM
+            logger.info(f"Final context size for chunk {i+1}: {len(chat_context)} characters")
+            
             enhanced_params = self.enhance_prompt_params(
                 prompt_params,
                 part_idx=i,
@@ -253,17 +303,33 @@ class LongFormContentGenerator:
                 chat_context=chat_context
             )
             enhanced_params["input_text"] = chunk
+            
+            # Log the total prompt size (approximation)
+            total_prompt_size = len(str(enhanced_params))
+            logger.info(f"Total prompt parameters size for chunk {i+1}: {total_prompt_size} characters")
+            
+            # Check if we're likely to exceed token limits before making the call
+            estimated_tokens = total_prompt_size * 0.75  # Rough estimate: 1 token ≈ 0.75 characters
+            if estimated_tokens > 2000000:  # Gemini's limit is ~2M tokens
+                logger.error(f"Estimated token count ({estimated_tokens:.0f}) likely to exceed Gemini limit!")
+                logger.error(f"Context size: {len(chat_context)}, Chunk size: {len(chunk)}")
+                logger.error(f"Enhanced params keys: {list(enhanced_params.keys())}")
+                # Log sizes of each parameter
+                for key, value in enhanced_params.items():
+                    if isinstance(value, str):
+                        logger.error(f"  {key}: {len(value)} characters")
+                
             response = self.llm_chain.invoke(enhanced_params)
-            if i == 0:
-                chat_context = response
-            else:
-                chat_context = chat_context + response
-            print(f"Generated part {i+1}/{num_parts}: Size {len(chunk)} characters.")
+            logger.info(f"Generated response for chunk {i+1}: {len(response)} characters")
+            
+            print(f"Generated part {i+1}/{num_parts}: Chunk size {len(chunk)} chars, Context size {len(chat_context)} chars.")
             #print(f"[LLM-START] Step: {i+1} ##############################")
             #print(response)
             #print(f"[LLM-END] Step: {i+1} ##############################")
             conversation_parts.append(response)
+            logger.info(f"Total conversation parts so far: {len(conversation_parts)}")
 
+        logger.info(f"Completed generation of {num_parts} parts")
         return self.stitch_conversations(conversation_parts)
     
     def stitch_conversations(self, parts: List[str]) -> str:

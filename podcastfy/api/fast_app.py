@@ -112,7 +112,12 @@ async def generate_podcast_endpoint(data: dict):
                     'question': voices.get('question', default_voices.get('question')),
                     'answer': voices.get('answer', default_voices.get('answer'))
                 }
-            }
+            },
+            'max_num_chunks': data.get('max_num_chunks', base_config.get('max_num_chunks', 8)),
+            'min_chunk_size': data.get('min_chunk_size', base_config.get('min_chunk_size', 600)),
+            'max_context_length': data.get('max_context_length', base_config.get('max_context_length', 50000)),
+            'context_window_size': data.get('context_window_size', base_config.get('context_window_size', 2))
+       
         }
 
         # Merge configurations
