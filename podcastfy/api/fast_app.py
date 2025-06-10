@@ -93,6 +93,33 @@ async def generate_podcast_endpoint(data: dict):
         logger.info(f"Using TTS model: {tts_model}")
         logger.info(f"Voices - Question: {voices.get('question', default_voices.get('question'))}, Answer: {voices.get('answer', default_voices.get('answer'))}")
         
+        # Handle text input
+        text_input = None
+        if 'text' in data:
+            text_data = data['text']
+            if isinstance(text_data, list):
+                text_input = '\n\n---------\n\n'.join(str(text) for text in text_data if text)
+                logger.info(f"Processing {len(text_data)} text inputs")
+            elif isinstance(text_data, str):
+                text_input = text_data
+                logger.info("Processing single text input")
+            else:
+                raise ValueError("Text input must be a string or array of strings")
+        
+        # Get URLs
+        urls = data.get('urls', [])
+        if urls:
+            logger.info(f"Processing {len(urls)} URLs")
+
+        if text_input and urls:
+            logger.info("Processing both URLs and text content")
+        elif text_input:
+            logger.info("Processing text content only")
+        elif urls:
+            logger.info("Processing URLs only")
+        else:
+            logger.warning("No URLs or text content provided")
+        
         # Prepare user configuration
         user_config = {
             'creativity': float(data.get('creativity', base_config.get('creativity', 0.7))),
@@ -118,9 +145,10 @@ async def generate_podcast_endpoint(data: dict):
         # Merge configurations
         conversation_config = merge_configs(base_config, user_config)
 
-        # Generate podcast
+        # Generate podcast with both URLs and text
         result = generate_podcast(
-            urls=data.get('urls', []),
+            urls=urls,
+            text=text_input,
             conversation_config=conversation_config,
             tts_model=tts_model,
             longform=bool(data.get('is_long_form', False)),
