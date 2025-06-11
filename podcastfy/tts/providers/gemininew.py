@@ -123,7 +123,7 @@ class GeminiNewTTS(TTSProvider):
         converted = converted.replace('<Person2>', f'<{voice2_name}>').replace('</Person2>', f'</{voice2_name}>')
         
         # Add TTS instruction at the beginning
-        instruction = f"TTS the following conversation between {voice1_name} and {voice2_name}:\n"
+        instruction = f"TTS the following conversation between {voice1_name} and {voice2_name}, make {voice1_name} and {voice2_name} sound like natural podcast hosts - conversational, professional, neutral, and without being overly excited or enthusiastic:\n\n"
         result = instruction + converted
         
         logger.info(f"✅ Text conversion completed")
@@ -137,10 +137,10 @@ class GeminiNewTTS(TTSProvider):
         Merge multiple audio chunks into a single audio file.
         
         Args:
-            audio_chunks (List[bytes]): List of audio data (MP3 format)
+            audio_chunks (List[bytes]): List of audio data (WAV format)
             
         Returns:
-            bytes: Combined audio data in MP3 format
+            bytes: Combined audio data in WAV format
         """
         logger.info(f"🔗 === STARTING AUDIO MERGE ===")
         logger.info(f"📊 Merging {len(audio_chunks)} audio chunks")
@@ -170,9 +170,9 @@ class GeminiNewTTS(TTSProvider):
                         logger.warning(f"⚠️ Skipping empty chunk {i+1}")
                         continue
                     
-                    # Create audio segment from raw MP3 data
+                    # Create audio segment from raw WAV data
                     try:
-                        segment = AudioSegment.from_mp3(BytesIO(chunk))
+                        segment = AudioSegment.from_wav(BytesIO(chunk))
                         if len(segment) > 0:
                             valid_chunks.append(segment)
                             logger.info(f"✅ Successfully processed chunk {i+1}: {len(segment)}ms duration")
@@ -202,14 +202,12 @@ class GeminiNewTTS(TTSProvider):
             total_duration = len(combined)
             logger.info(f"🎶 Combined audio duration: {total_duration}ms")
             
-            # Export to MP3 bytes
-            logger.debug(f"🔄 Exporting to MP3 format...")
+            # Export to WAV bytes
+            logger.debug(f"🔄 Exporting to WAV format...")
             output = BytesIO()
             combined.export(
                 output,
-                format="mp3",
-                codec="libmp3lame",
-                bitrate="320k"
+                format="wav"
             )
             
             result = output.getvalue()
@@ -239,7 +237,7 @@ class GeminiNewTTS(TTSProvider):
             voice_name (str): Voice name (default: Kore)
             
         Returns:
-            bytes: Audio data in MP3 format
+            bytes: Audio data in WAV format
         """
         try:
             logger.info(f"🗣️ === GENERATING SINGLE-SPEAKER AUDIO ===")
@@ -376,34 +374,50 @@ class GeminiNewTTS(TTSProvider):
                 
                 if header == b'RIFF':
                     logger.info(f"🎵 Detected WAV format in decoded data!")
-                    wav_segment = AudioSegment.from_wav(BytesIO(pcm_data))
-                    logger.info(f"🎶 Direct WAV AudioSegment: {len(wav_segment)}ms duration")
+                    try:
+                        wav_segment = AudioSegment.from_wav(BytesIO(pcm_data))
+                        if len(wav_segment) > 0:  # Validate the WAV is not empty
+                            logger.info(f"🎶 Direct WAV AudioSegment: {len(wav_segment)}ms duration")
+                            logger.info(f"✅ Returning WAV data directly: {len(pcm_data)} bytes")
+                            return pcm_data
+                        else:
+                            logger.warning(f"⚠️ WAV segment has zero duration, falling back to PCM conversion")
+                    except Exception as e:
+                        logger.warning(f"⚠️ Failed to process as WAV: {str(e)}, falling back to PCM conversion")
                     
-                    mp3_output = BytesIO()
-                    wav_segment.export(mp3_output, format="mp3", codec="libmp3lame", bitrate="320k")
-                    result = mp3_output.getvalue()
-                    logger.info(f"✅ Direct WAV to MP3 conversion completed: {len(result)} bytes")
-                    return result
-                    
-                elif header[:3] == b'ID3' or header[:2] == b'\xff\xfb':
+                elif header[:3] == b'ID3' or (len(pcm_data) >= 2 and header[:2] == b'\xff\xfb'):
                     logger.info(f"🎵 Detected MP3 format in decoded data!")
-                    logger.info(f"✅ Returning MP3 data directly: {len(pcm_data)} bytes")
-                    return pcm_data
+                    try:
+                        # Convert MP3 to WAV for high quality output
+                        mp3_segment = AudioSegment.from_mp3(BytesIO(pcm_data))
+                        if len(mp3_segment) > 0:  # Validate the MP3 is not empty
+                            logger.info(f"🎶 MP3 AudioSegment: {len(mp3_segment)}ms duration")
+                            
+                            wav_output = BytesIO()
+                            mp3_segment.export(wav_output, format="wav")
+                            result = wav_output.getvalue()
+                            
+                            logger.info(f"✅ MP3 to WAV conversion completed: {len(result)} bytes")
+                            return result
+                        else:
+                            logger.warning(f"⚠️ MP3 segment has zero duration, falling back to PCM conversion")
+                    except Exception as e:
+                        logger.warning(f"⚠️ Failed to validate MP3: {str(e)}, falling back to PCM conversion")
                 else:
                     logger.info(f"🔍 Unknown format header, treating as raw PCM")
             else:
                 logger.warning(f"⚠️ Data too short for format detection: {len(pcm_data)} bytes")
             
-            # If we get here, treat as PCM data
+            # If we get here, treat as PCM data and convert to WAV
             logger.info(f"🎵 Treating decoded data as raw PCM format")
             
-            # Convert PCM to MP3 format
-            logger.debug(f"🎵 Converting PCM to MP3...")
-            mp3_data = self.pcm_to_mp3(pcm_data)
-            logger.info(f"✅ Converted MP3 data length: {len(mp3_data)} bytes")
+            # Convert PCM to WAV format
+            logger.debug(f"🎵 Converting PCM to WAV...")
+            wav_data = self.pcm_to_wav(pcm_data)
+            logger.info(f"✅ Converted WAV data length: {len(wav_data)} bytes")
             
             logger.info(f"🎉 === SINGLE-SPEAKER AUDIO GENERATION COMPLETED ===")
-            return mp3_data
+            return wav_data
             
         except Exception as e:
             logger.error(f"💥 === SINGLE-SPEAKER AUDIO GENERATION FAILED ===")
@@ -423,7 +437,7 @@ class GeminiNewTTS(TTSProvider):
             speaker2_name (str): Name for second speaker in conversation (default: Guest)
             
         Returns:
-            bytes: Audio data in MP3 format
+            bytes: Audio data in WAV format
         """
         try:
             logger.info(f"🎭 === GENERATING MULTI-SPEAKER AUDIO ===")
@@ -582,43 +596,59 @@ class GeminiNewTTS(TTSProvider):
                 
                 if header == b'RIFF':
                     logger.info(f"🎵 Detected WAV format in decoded data!")
-                    wav_segment = AudioSegment.from_wav(BytesIO(pcm_data))
-                    logger.info(f"🎶 Direct WAV AudioSegment: {len(wav_segment)}ms duration")
+                    try:
+                        wav_segment = AudioSegment.from_wav(BytesIO(pcm_data))
+                        if len(wav_segment) > 0:  # Validate the WAV is not empty
+                            logger.info(f"🎶 Direct WAV AudioSegment: {len(wav_segment)}ms duration")
+                            logger.info(f"✅ Returning WAV data directly: {len(pcm_data)} bytes")
+                            return pcm_data
+                        else:
+                            logger.warning(f"⚠️ WAV segment has zero duration, falling back to PCM conversion")
+                    except Exception as e:
+                        logger.warning(f"⚠️ Failed to process as WAV: {str(e)}, falling back to PCM conversion")
                     
-                    mp3_output = BytesIO()
-                    wav_segment.export(mp3_output, format="mp3", codec="libmp3lame", bitrate="320k")
-                    result = mp3_output.getvalue()
-                    logger.info(f"✅ Direct WAV to MP3 conversion completed: {len(result)} bytes")
-                    return result
-                    
-                elif header[:3] == b'ID3' or header[:2] == b'\xff\xfb':
+                elif header[:3] == b'ID3' or (len(pcm_data) >= 2 and header[:2] == b'\xff\xfb'):
                     logger.info(f"🎵 Detected MP3 format in decoded data!")
-                    logger.info(f"✅ Returning MP3 data directly: {len(pcm_data)} bytes")
-                    return pcm_data
+                    try:
+                        # Convert MP3 to WAV for high quality output
+                        mp3_segment = AudioSegment.from_mp3(BytesIO(pcm_data))
+                        if len(mp3_segment) > 0:  # Validate the MP3 is not empty
+                            logger.info(f"🎶 MP3 AudioSegment: {len(mp3_segment)}ms duration")
+                            
+                            wav_output = BytesIO()
+                            mp3_segment.export(wav_output, format="wav")
+                            result = wav_output.getvalue()
+                            
+                            logger.info(f"✅ MP3 to WAV conversion completed: {len(result)} bytes")
+                            return result
+                        else:
+                            logger.warning(f"⚠️ MP3 segment has zero duration, falling back to PCM conversion")
+                    except Exception as e:
+                        logger.warning(f"⚠️ Failed to validate MP3: {str(e)}, falling back to PCM conversion")
                 else:
                     logger.info(f"🔍 Unknown format header, treating as raw PCM")
             else:
                 logger.warning(f"⚠️ Data too short for format detection: {len(pcm_data)} bytes")
             
-            # If we get here, treat as PCM data
+            # If we get here, treat as PCM data and convert to WAV
             logger.info(f"🎵 Treating decoded data as raw PCM format")
             
-            # Convert PCM to MP3 format
-            logger.debug(f"🎵 Converting PCM to MP3...")
-            mp3_data = self.pcm_to_mp3(pcm_data)
-            logger.info(f"✅ Converted MP3 data length: {len(mp3_data)} bytes")
+            # Convert PCM to WAV format
+            logger.debug(f"🎵 Converting PCM to WAV...")
+            wav_data = self.pcm_to_wav(pcm_data)
+            logger.info(f"✅ Converted WAV data length: {len(wav_data)} bytes")
             
             logger.info(f"🎉 === MULTI-SPEAKER AUDIO GENERATION COMPLETED ===")
-            return mp3_data
+            return wav_data
             
         except Exception as e:
             logger.error(f"💥 === MULTI-SPEAKER AUDIO GENERATION FAILED ===")
             logger.error(f"❌ Multi-speaker audio generation failed: {str(e)}")
             raise RuntimeError(f"Failed to generate multi-speaker audio: {str(e)}") from e
 
-    def pcm_to_mp3(self, pcm_data: bytes, channels: int = 1, sample_rate: int = 24000, sample_width: int = 2) -> bytes:
+    def pcm_to_wav(self, pcm_data: bytes, channels: int = 1, sample_rate: int = 24000, sample_width: int = 2) -> bytes:
         """
-        Convert PCM data to MP3 format.
+        Convert PCM data to WAV format with robust error handling.
         
         Args:
             pcm_data (bytes): Raw PCM audio data
@@ -627,63 +657,99 @@ class GeminiNewTTS(TTSProvider):
             sample_width (int): Sample width in bytes (default: 2)
             
         Returns:
-            bytes: MP3 formatted audio data
+            bytes: WAV formatted audio data
         """
-        logger.info(f"🎵 === STARTING PCM TO MP3 CONVERSION ===")
+        logger.info(f"🎵 === STARTING PCM TO WAV CONVERSION ===")
         logger.info(f"📊 Audio parameters:")
         logger.info(f"   - PCM data size: {len(pcm_data)} bytes")
         logger.info(f"   - Channels: {channels}")
         logger.info(f"   - Sample rate: {sample_rate}Hz")
         logger.info(f"   - Sample width: {sample_width} bytes")
         
-        # Calculate expected duration
-        samples_per_second = sample_rate * channels * sample_width
-        expected_duration_ms = (len(pcm_data) / samples_per_second) * 1000
-        logger.info(f"📏 Expected audio duration: {expected_duration_ms:.1f}ms")
+        # Validate PCM data size
+        if len(pcm_data) == 0:
+            logger.error(f"❌ Empty PCM data provided")
+            raise ValueError("Empty PCM data provided")
         
-        # First convert PCM to WAV, then to MP3
-        logger.debug(f"🔄 Step 1: Converting PCM to WAV format...")
-        wav_output = BytesIO()
+        # Calculate expected duration and validate
+        bytes_per_sample = channels * sample_width
+        total_samples = len(pcm_data) // bytes_per_sample
+        expected_duration_ms = (total_samples / sample_rate) * 1000
+        logger.info(f"📏 Expected audio duration: {expected_duration_ms:.1f}ms ({total_samples} samples)")
         
-        with wave.open(wav_output, 'wb') as wav_file:
-            wav_file.setnchannels(channels)
-            wav_file.setsampwidth(sample_width)
-            wav_file.setframerate(sample_rate)
-            wav_file.writeframes(pcm_data)
+        # Validate that we have a reasonable amount of data
+        if expected_duration_ms < 10:  # Less than 10ms is likely corrupted
+            logger.error(f"❌ Audio duration too short: {expected_duration_ms:.1f}ms - data may be corrupted")
+            raise ValueError(f"Audio duration too short: {expected_duration_ms:.1f}ms")
         
-        # Convert WAV to MP3
-        wav_data = wav_output.getvalue()
-        logger.info(f"✅ Created WAV data: {len(wav_data)} bytes")
+        # Ensure PCM data length is aligned to sample boundaries
+        expected_length = total_samples * bytes_per_sample
+        if len(pcm_data) != expected_length:
+            logger.warning(f"⚠️ PCM data length not aligned to sample boundaries")
+            logger.warning(f"   Expected: {expected_length} bytes, Got: {len(pcm_data)} bytes")
+            # Trim to align with sample boundaries
+            pcm_data = pcm_data[:expected_length]
+            logger.info(f"✂️ Trimmed PCM data to {len(pcm_data)} bytes")
         
-        logger.debug(f"🔄 Step 2: Loading WAV into AudioSegment...")
-        wav_segment = AudioSegment.from_wav(BytesIO(wav_data))
-        logger.info(f"🎶 AudioSegment created:")
-        logger.info(f"   - Duration: {len(wav_segment)}ms")
-        logger.info(f"   - Channels: {wav_segment.channels}")
-        logger.info(f"   - Frame rate: {wav_segment.frame_rate}Hz")
-        logger.info(f"   - Sample width: {wav_segment.sample_width} bytes")
-        
-        # Check if duration makes sense
-        if len(wav_segment) < 10:
-            logger.warning(f"⚠️ Very short audio duration: {len(wav_segment)}ms - this might be an issue!")
-        
-        logger.debug(f"🔄 Step 3: Exporting to MP3 format...")
-        mp3_output = BytesIO()
-        wav_segment.export(
-            mp3_output,
-            format="mp3",
-            codec="libmp3lame",
-            bitrate="320k"
-        )
-        
-        result = mp3_output.getvalue()
-        logger.info(f"✅ === PCM TO MP3 CONVERSION COMPLETED ===")
-        logger.info(f"📊 Final MP3 data: {len(result)} bytes")
-        
-        if len(result) < 1000:
-            logger.warning(f"⚠️ Very small MP3 file size: {len(result)} bytes - this might indicate an issue!")
-        
-        return result
+        try:
+            # Convert PCM to WAV format directly
+            logger.debug(f"🔄 Converting PCM to WAV format...")
+            wav_output = BytesIO()
+            
+            with wave.open(wav_output, 'wb') as wav_file:
+                wav_file.setnchannels(channels)
+                wav_file.setsampwidth(sample_width)
+                wav_file.setframerate(sample_rate)
+                wav_file.writeframes(pcm_data)
+            
+            result = wav_output.getvalue()
+            logger.info(f"✅ Created WAV data: {len(result)} bytes")
+            
+            # Validate WAV data
+            if len(result) < 44:  # WAV header is 44 bytes minimum
+                logger.error(f"❌ Generated WAV data too small: {len(result)} bytes")
+                raise ValueError("Generated WAV data is too small")
+            
+            # Verify WAV by loading it back
+            logger.debug(f"🔄 Validating generated WAV...")
+            try:
+                wav_segment = AudioSegment.from_wav(BytesIO(result))
+                logger.info(f"🎶 WAV validation successful:")
+                logger.info(f"   - Duration: {len(wav_segment)}ms")
+                logger.info(f"   - Channels: {wav_segment.channels}")
+                logger.info(f"   - Frame rate: {wav_segment.frame_rate}Hz")
+                logger.info(f"   - Sample width: {wav_segment.sample_width} bytes")
+                
+                # Validate AudioSegment
+                if len(wav_segment) < 10:
+                    logger.error(f"❌ AudioSegment duration too short: {len(wav_segment)}ms")
+                    raise ValueError(f"AudioSegment duration too short: {len(wav_segment)}ms")
+                
+                # Check if duration matches expectation (within 10% tolerance)
+                duration_diff = abs(len(wav_segment) - expected_duration_ms)
+                if duration_diff > expected_duration_ms * 0.1:
+                    logger.warning(f"⚠️ Duration mismatch: expected {expected_duration_ms:.1f}ms, got {len(wav_segment)}ms")
+                
+            except Exception as e:
+                logger.error(f"❌ WAV validation failed: {str(e)}")
+                raise ValueError(f"Generated WAV file is invalid: {str(e)}")
+            
+            # Verify WAV header
+            if len(result) >= 12:
+                if result[:4] == b'RIFF' and result[8:12] == b'WAVE':
+                    logger.info(f"✅ Valid WAV header detected")
+                else:
+                    logger.warning(f"⚠️ WAV header not detected, first 12 bytes: {result[:12].hex()}")
+            
+            logger.info(f"✅ === PCM TO WAV CONVERSION COMPLETED ===")
+            logger.info(f"📊 Final WAV data: {len(result)} bytes")
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"❌ PCM to WAV conversion failed: {str(e)}")
+            logger.error(f"   PCM data info: size={len(pcm_data)}, channels={channels}, rate={sample_rate}, width={sample_width}")
+            raise RuntimeError(f"PCM to WAV conversion failed: {str(e)}") from e
 
     def generate_audio( self, text: str, voice: str = "Kore", model: str = None, 
                        voice2: str = "Puck", ending_message: str = "") -> bytes:
@@ -699,7 +765,7 @@ class GeminiNewTTS(TTSProvider):
             ending_message (str): Optional ending message
             
         Returns:
-            bytes: Audio data in MP3 format (single chunk for compatibility with existing system)
+            bytes: Audio data in WAV format (single chunk for compatibility with existing system)
         """
     
 
