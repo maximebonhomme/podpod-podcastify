@@ -12,7 +12,7 @@ import yaml
 from typing import Dict, Any
 from pathlib import Path
 from ..client import generate_podcast
-from ..storage import s3_storage
+from ..storage import s3_storage, supabase_client
 import uvicorn
 import logging
 import sys
@@ -164,7 +164,27 @@ async def generate_podcast_endpoint(data: dict):
             if data.get('podcast_id'):
                 # Add intro and upload to S3 if podcast_id is provided
                 audio_with_intro = addIntroToAudio(result)
+                
+                # Get audio metadata before upload
+                metadata = getAudioMetadata(audio_with_intro)
+                
+                # Upload to S3
                 audio_url = s3_storage.upload_file(audio_with_intro, data['podcast_id'])
+                
+                # Update Supabase with completion status and audio metadata
+                try:
+                    supabase_client.update_podcast_completion(
+                        podcast_id=data['podcast_id'],
+                        audio_url=audio_url,
+                        audio_length=metadata['audio_length'],
+                        audio_content_type=metadata['audio_content_type'],
+                        audio_file_size=metadata['audio_file_size']
+                    )
+                    logger.info(f"Updated podcast {data['podcast_id']} in Supabase")
+                except Exception as e:
+                    logger.error(f"Failed to update podcast {data['podcast_id']} in Supabase: {str(e)}")
+                    # Don't fail the request if Supabase update fails
+                
                 os.remove(audio_with_intro)  # Clean up the temporary file
                 end_time = time.time()
                 logger.info(f"✅ [{request_id}] SUCCESS - Duration: {end_time - start_time:.1f}s, Audio uploaded to S3")
@@ -188,7 +208,27 @@ async def generate_podcast_endpoint(data: dict):
             if data.get('podcast_id'):
                 # Add intro and upload to S3 if podcast_id is provided
                 audio_with_intro = addIntroToAudio(result.audio_path)
+                
+                # Get audio metadata before upload
+                metadata = getAudioMetadata(audio_with_intro)
+                
+                # Upload to S3
                 audio_url = s3_storage.upload_file(audio_with_intro, data['podcast_id'])
+                
+                # Update Supabase with completion status and audio metadata
+                try:
+                    supabase_client.update_podcast_completion(
+                        podcast_id=data['podcast_id'],
+                        audio_url=audio_url,
+                        audio_length=metadata['audio_length'],
+                        audio_content_type=metadata['audio_content_type'],
+                        audio_file_size=metadata['audio_file_size']
+                    )
+                    logger.info(f"Updated podcast {data['podcast_id']} in Supabase")
+                except Exception as e:
+                    logger.error(f"Failed to update podcast {data['podcast_id']} in Supabase: {str(e)}")
+                    # Don't fail the request if Supabase update fails
+                
                 os.remove(audio_with_intro)  # Clean up the temporary file
                 end_time = time.time()
                 logger.info(f"✅ [{request_id}] SUCCESS - Duration: {end_time - start_time:.1f}s, Audio uploaded to S3")
@@ -213,8 +253,23 @@ async def generate_podcast_endpoint(data: dict):
 
     except Exception as e:
         end_time = time.time()
-        logger.error(f"❌ [{request_id}] ERROR - Duration: {end_time - start_time:.1f}s, Error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        error_message = str(e)
+        logger.error(f"❌ [{request_id}] ERROR - Duration: {end_time - start_time:.1f}s, Error: {error_message}")
+        
+        # Update Supabase with failure status if podcast_id is provided
+        if data.get('podcast_id'):
+            try:
+                supabase_client.update_podcast_status(
+                    podcast_id=data['podcast_id'],
+                    status='failed',
+                    failed_reason=error_message
+                )
+                logger.info(f"Updated podcast {data['podcast_id']} status to failed in Supabase")
+            except Exception as supabase_error:
+                logger.error(f"Failed to update podcast {data['podcast_id']} failure status in Supabase: {str(supabase_error)}")
+                # Don't fail the request if Supabase update fails
+        
+        raise HTTPException(status_code=500, detail=error_message)
 
 @app.get("/health")
 async def healthcheck():
@@ -233,11 +288,15 @@ async def healthcheck():
         # Check S3 connection if configured
         is_connected, s3_status = s3_storage.check_connection()
         
+        # Check Supabase connection if configured
+        supabase_connected, supabase_status = supabase_client.check_connection()
+        
         return {
             "status": "healthy",
             "temp_dir": TEMP_DIR,
             "temp_dir_writable": True,
             "s3_status": s3_status,
+            "supabase_status": supabase_status,
             "environment": {
                 "python_version": os.sys.version,
                 "working_directory": os.getcwd(),
@@ -249,13 +308,67 @@ async def healthcheck():
                     "S3_PODCAST_ACCESS_KEY": bool(os.getenv("S3_PODCAST_ACCESS_KEY")),
                     "S3_PODCAST_SECRET_KEY": bool(os.getenv("S3_PODCAST_SECRET_KEY")),
                     "S3_PODCAST_BUCKET": bool(os.getenv("S3_PODCAST_BUCKET")),
-                    "S3_PODCAST_PUBLIC_URL": bool(os.getenv("S3_PODCAST_PUBLIC_URL"))
+                    "S3_PODCAST_PUBLIC_URL": bool(os.getenv("S3_PODCAST_PUBLIC_URL")),
+                    "SUPABASE_URL": bool(os.getenv("SUPABASE_URL")),
+                    "SUPABASE_ANON_KEY": bool(os.getenv("SUPABASE_ANON_KEY")),
+                    "SUPABASE_KEY": bool(os.getenv("SUPABASE_KEY"))
                 }
             }
         }
     except Exception as e:
         logger.error(f"Health check failed: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+def getAudioMetadata(audio_file_path: str) -> dict:
+    """
+    Get metadata from audio file.
+    
+    Args:
+        audio_file_path: Path to the audio file
+        
+    Returns:
+        Dict containing audio metadata
+    """
+    from pydub import AudioSegment
+    import os
+    
+    try:
+        # Load audio file
+        audio = AudioSegment.from_file(audio_file_path)
+        
+        # Get file size
+        file_size = str(os.path.getsize(audio_file_path))
+        
+        # Get audio length in seconds
+        length_seconds = len(audio) / 1000  # pydub returns milliseconds
+        audio_length = str(int(length_seconds))
+        
+        # Determine content type based on file extension
+        file_extension = os.path.splitext(audio_file_path)[1].lower()
+        content_type_map = {
+            '.mp3': 'audio/mpeg',
+            '.wav': 'audio/wav',
+            '.m4a': 'audio/mp4',
+            '.aac': 'audio/aac',
+            '.ogg': 'audio/ogg'
+        }
+        content_type = content_type_map.get(file_extension, 'audio/mpeg')
+        
+        logger.info(f"Audio metadata - Length: {audio_length}s, Size: {file_size} bytes, Type: {content_type}")
+        
+        return {
+            'audio_length': audio_length,
+            'audio_file_size': file_size,
+            'audio_content_type': content_type
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to get audio metadata: {str(e)}")
+        return {
+            'audio_length': '',
+            'audio_file_size': '',
+            'audio_content_type': 'audio/mpeg'
+        }
 
 def addIntroToAudio(audio_file_path: str) -> str:
     """
