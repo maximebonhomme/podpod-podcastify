@@ -73,6 +73,7 @@ LONGFORM_PROMPT_CONTENT = [
         'content': (
             'You are a script writer for a podcast. You are creative and understand how to make natural sounding conversations. Turn the text into a script for a podcast hosted by Kai and June.\n'
             '# Instructions:\n'
+            '- You are writing a script for a Podcast where two hosts discuss a {instruction}\n'
             #CONTENT
             '## Content Guide\n'
             '- You are writing a script for a Podcast where two hosts discuss a pieces of content\n'
