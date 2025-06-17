@@ -382,7 +382,7 @@ def addIntroToAudio(audio_file_path: str) -> str:
     """
     from pydub import AudioSegment
     
-    intro_path = os.path.join(os.path.dirname(__file__), "..", "..", "data", "audio", "intro.wav")
+    intro_path = os.path.join(os.path.dirname(__file__), "intro.wav")
     
     # Check if intro file exists
     if not os.path.exists(intro_path):
