@@ -707,7 +707,7 @@ class ContentGenerator:
     def __init__(
         self, 
         is_local: bool=False, 
-        model_name: str="gemini-1.5-pro-latest", 
+        model_name: str="gemini-2.5-pro", 
         api_key_label: str="GEMINI_API_KEY",
         conversation_config: Optional[Dict[str, Any]] = None
     ):
@@ -739,6 +739,14 @@ class ContentGenerator:
                 # Initialize LLM backend
         if not model_name:
             model_name = self.content_generator_config.get("llm_model")
+        
+        # Backward-compatibility: remap deprecated Gemini model aliases
+        legacy_to_current_model: Dict[str, str] = {
+            "gemini-1.5-pro-latest": "gemini-2.5-pro",
+            "gemini-1.5-pro": "gemini-2.5-pro",
+        }
+        if isinstance(model_name, str):
+            model_name = legacy_to_current_model.get(model_name, model_name)
         if is_local:
             model_name = "User provided local model"
 
